@@ -23,7 +23,11 @@
  */
 
 #include <assert.h>
+#include <deque>
+#include <list>
+#include <map>
 #include <memory>
+#include <algorithm>
 
 #include "util.h"
 
@@ -33,47 +37,224 @@ namespace jahn  // namespace for joon ahn
 
 using namespace std;    // for ease of prototyping
 
-class RequestContainer
+typedef int     id_t;
+typedef int     time_t;
+
+class Simulator
 {
+public:
+    bool    isEnd() const {return curTime_ >= endTime_;}
+    void    setTime(time_t t) {curTime_ = t;}
+    void    setEndTime(time_t t) {endTime_ = t;}
+    err_t   advanceTime() {curTime_++; return 0;}
+    time_t  time() const {return curTime_;}
+
+private:
+    time_t  curTime_;
+    time_t  endTime_;
 };
 
+Simulator&
+getSimulator()
+{
+    static Simulator sim;
+    return sim;
+}
+
+
+class Request
+{
+public:
+    size_t  units() const {return units_;}
+    time_t  duration() const {return duration_;}
+
+private:
+    size_t  units_;
+    time_t  duration_;
+};
+
+class RequestContainer
+{
+public:
+    virtual ~RequestContainer() = 0;
+    virtual Request next() = 0;
+    virtual void    restore(const Request&) = 0;
+    virtual bool    empty() const = 0;
+};
+
+class RequestQueue : public RequestContainer
+{
+public:
+    bool    empty() const {return requests_.empty();}
+
+    Request next() {
+        Request req = move(requests_.front());
+        requests_.pop_front();
+        return move(req);
+    }
+
+    void    restore(const Request& req) {
+        requests_.push_front(req);
+    }
+
+private:
+    deque<Request>  requests_;
+};
+
+class Task
+{
+public:
+    Task(time_t s, time_t e, size_t u) : stime_(s), etime_(e), units_(u) {}
+    time_t  startTime() const {return stime_;}
+    time_t  endTime() const {return etime_;}
+    size_t  units() const {return units_;}
+
+private:
+    time_t  stime_;
+    time_t  etime_;
+    size_t  units_;
+};
+
+class Resource
+{
+public:
+    id_t    node() const {return node_;}
+    size_t  unreservedUnits() const {
+        time_t curtime = getSimulator().time();
+        // todo: remove finshed reservations
+        size_t resv = 0;
+        for (auto it = reservations_.begin(); it != reservations_.end(); ++it) {
+            if (curtime >= it->startTime() && curtime < it->endTime()) {
+                resv += it->units();
+            }
+        }
+        return units_ >= resv ? units_ - resv : 0;
+    }
+
+    err_t   reserve(const Request& req) {
+        // assumption: there is no reservation that is started from future.
+        if (unreservedUnits() < req.units()) {
+            return ERR_NO_RESOURCE;
+        }
+
+        const Simulator& sim = getSimulator();
+        reservations_.push_back(Task(sim.time(),
+                                     sim.time() + req.duration(),
+                                     req.units()));
+        return 0;
+    }
+
+private:
+    id_t    node_;
+    size_t  units_;
+    list<Task>  reservations_;
+};
+
+#if 0
 class ResourceContainer
 {
+public:
+    virtual ~ResourceContainer() = 0;
+    virtual err_t   reserve(id_t, const Request&) = 0;
 };
+#endif
+
+class ResourceSet // : public ResourceContainer
+{
+    typedef map<id_t, Resource> container_t;
+
+public:
+    container_t::iterator   begin() {return resources_.begin();}
+    container_t::iterator   end() {return resources_.end();}
+
+    err_t   reserve(id_t node, const Request& req) {
+        auto it = resources_.find(node);
+        if (it == resources_.end()) {
+            return ERR_NOT_EXIST;
+        }
+        Resource& res = it->second;
+        if (res.unreservedUnits() < req.units()) {
+            return ERR_NO_RESOURCE;
+        }
+        return res.reserve(req);
+    }
+
+private:
+    container_t  resources_;
+};
+
+#if 0
+class Assignment
+{
+public:
+    Assignment(id_t, Request&&);
+};
+#endif
+
 
 class Scheduler
 {
 public:
-    Scheduler() : ptrRequests_(new RequestContainer), ptrResources_(new ResourceContainer),
+    Scheduler() : ptrRequests_(new RequestQueue), ptrResources_(new ResourceSet),
         requests_(*ptrRequests_), resources_(*ptrResources_) {}
+    RequestContainer&   requestContainer() {return requests_;}
+    ResourceSet&  resourceContainer() {return resources_;}
+
     err_t   scheduleNext();
-    RequestContainer&   requestContainer();
-    ResourceContainer&  resourceContainer();
+    id_t    bestNode(const Request& req);
 
 private:
     unique_ptr<RequestContainer>    ptrRequests_;
-    unique_ptr<ResourceContainer>   ptrResources_;
+    unique_ptr<ResourceSet>   ptrResources_;
     RequestContainer&   requests_;
-    ResourceContainer&  resources_;
+    ResourceSet&  resources_;
 };
+
+id_t
+Scheduler::bestNode(const Request& req)
+{
+    // attempt 1: get any node who has at least the needed units
+    for (auto it = resources_.begin(); it != resources_.end(); ++it) {
+        if (it->second.unreservedUnits() >= req.units()) {
+            return it->second.node();
+        }
+    }
+
+    // no avaiable resource:
+    return 0;
+}
+
 
 err_t
 Scheduler::scheduleNext()
 {
     // get next request
+    if (requests_.empty()) {
+        return ERR_NOJOB;
+    }
 
-    // find a proper resource
+//    err_t err = 0;
+    Request req = requests_.next();
+    id_t node = bestNode(req);
+    if (node == 0) {
+        // no available resources
+        requests_.restore(req);
+        return ERR_NO_RESOURCE;
+    }
 
     // reserve the resource for the needed time
+    resources_.reserve(node, req);
 
     // recommend the assignment
+//    Assignment(node, move(req));
+    return 0;
 }
 
 
 class ResourceTracker
 {
 public:
-    explicit ResourceTracker(ResourceContainer&);
+    explicit ResourceTracker(ResourceSet&);
     err_t   update();
 };
 
@@ -84,16 +265,10 @@ public:
     err_t   update();
 };
 
-class Simulator
-{
-public:
-    bool    isEnd() const;
-    err_t   advanceTime();
-};
-
 err_t
 simulate()
 {
+    int duration = 10;
     err_t err = 0;
 
     Simulator sim;
@@ -104,6 +279,9 @@ simulate()
     RequestTaker reqTaker(sched.requestContainer());
 
     // run scheduler for the given time
+    sim.setTime(0);
+    sim.setEndTime(duration);
+
     while (!sim.isEnd()) {
 
         // update resources for this time slot

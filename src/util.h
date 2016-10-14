@@ -37,11 +37,14 @@ namespace jahn
 enum ErrorCodes {
     ERR_NOERR = 0,
     ERR_GEN,
+    ERR_NOJOB,
+    ERR_NO_RESOURCE,
+    ERR_NOT_EXIST,
+
     ERR_INVALIDARGS,
     ERR_LOWMEM,
     ERR_INSUFFICIENT_BUFFER,
     ERR_NOT_READY,
-    ERR_NOJOB,
 };
 
 typedef int       err_t;
