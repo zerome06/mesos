@@ -65,6 +65,7 @@ getSimulator()
 class Request
 {
 public:
+    Request(size_t s, time_t t) : units_(s), duration_(t) {}
     size_t  units() const {return units_;}
     time_t  duration() const {return duration_;}
 
@@ -76,10 +77,11 @@ private:
 class RequestContainer
 {
 public:
-    virtual ~RequestContainer() = 0;
+    virtual ~RequestContainer() {}
     virtual Request next() = 0;
     virtual void    restore(const Request&) = 0;
     virtual bool    empty() const = 0;
+    virtual err_t   insert(const Request&) = 0;
 };
 
 class RequestQueue : public RequestContainer
@@ -95,6 +97,11 @@ public:
 
     void    restore(const Request& req) {
         requests_.push_front(req);
+    }
+
+    err_t   insert(const Request&) {
+        // todo: implement it
+        return 0;
     }
 
 private:
@@ -118,7 +125,12 @@ private:
 class Resource
 {
 public:
+    Resource(id_t n, size_t u) : node_(n), units_(u) {}
+
     id_t    node() const {return node_;}
+    size_t  units() const {return units_;}
+    void    setUnits(size_t u) {units_ = u;}
+
     size_t  unreservedUnits() const {
         time_t curtime = getSimulator().time();
         // todo: remove finshed reservations
@@ -177,6 +189,16 @@ public:
             return ERR_NO_RESOURCE;
         }
         return res.reserve(req);
+    }
+
+    err_t   update(const Resource& res) {
+        auto it = resources_.find(res.node());
+        if (it == resources_.end()) {
+            resources_.insert(make_pair(res.node(), res));
+            return 0;
+        }
+        it->second.setUnits(res.units());
+        return 0;
     }
 
 private:
@@ -254,15 +276,48 @@ Scheduler::scheduleNext()
 class ResourceTracker
 {
 public:
-    explicit ResourceTracker(ResourceSet&);
-    err_t   update();
+    explicit ResourceTracker(ResourceSet& s) : resources_(s) {}
+    err_t   update() {
+        // todo: make it random.
+
+        time_t t = getSimulator().time();
+        // only for initialization, for now.
+
+        if (t == 0) {
+            id_t nnodes = 10;
+
+            for (id_t i = 1; i <= nnodes; ++i) {
+                Resource res(i, 10 + i);
+                resources_.update(res);
+            }
+        }
+        return 0;
+    }
+
+private:
+    ResourceSet&    resources_;
 };
 
 class RequestTaker
 {
 public:
-    explicit RequestTaker(RequestContainer&);
-    err_t   update();
+    explicit RequestTaker(RequestContainer& r) : requests_(r) {}
+    err_t   update() {
+        time_t t = getSimulator().time();
+        // todo: randomize it
+
+        int nreqs = 7;
+
+        for (int i = 0; i < nreqs ;++i) {
+            Request req(t+i+1, 7);
+            requests_.insert(req);
+        }
+
+        return 0;
+    }
+
+private:
+    RequestContainer& requests_;
 };
 
 err_t
@@ -304,6 +359,8 @@ simulate()
 
         sim.advanceTime();
     }
+
+    // todo: print stat
 
     return err;
 }
